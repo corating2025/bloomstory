@@ -1,6 +1,6 @@
 import express from "express";
+import fs from "fs";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -21,93 +21,143 @@ const ai = apiKey ? new GoogleGenAI({
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(
+    process.env.NGINX_PORT || process.env.DEFAULT_APP_PORT
+      ? (process.env.DEFAULT_APP_PORT || 3000)
+      : (process.env.PORT || 3000)
+  );
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Serve custom IMAGES folder statically
-  app.use('/IMAGES', express.static(path.join(process.cwd(), 'IMAGES')));
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
 
   // API Route: Check Empathy
   app.post("/api/empathy/check", async (req, res) => {
+    // Local fallback generator for empathy evaluation
+    const { language } = req.body;
+    const targetLang: 'english' | 'cantonese' | 'mandarin' = language || 'english';
+    
+    const getOfflineFeedback = (scenarioId: string, text: string) => {
+      const lowerInput = text.toLowerCase();
+      const generalHarshWords = ["lazy", "picky", "weak", "terrible", "disgusting", "untidy", "stupid", "dumb", "clumsy", "careless", "bad"];
+      const scenarioHarshWords: Record<string, string[]> = {
+        homework: ["lazy", "slacker", "slow", "stupid", "dumb"],
+        sports: ["weak", "slow", "loser", "useless", "terrible"],
+        dinner: ["picky", "spoiled", "stubborn", "disgusting"],
+        bedroom: ["terrible", "messy", "pig", "untidy", "dirty"],
+        test: ["stupid", "dumb", "idiot", "bad", "disappointed"],
+        vase: ["clumsy", "careless", "stupid", "troublemaker"]
+      };
+
+      const currentHarshWords = scenarioHarshWords[scenarioId] || generalHarshWords;
+      const foundHarsh = currentHarshWords.find(w => lowerInput.includes(w)) || 
+                         generalHarshWords.find(w => lowerInput.includes(w));
+
+      // Simple writing/grammar check
+      const grammarPoints: string[] = [];
+      if (text[0] !== text[0].toUpperCase()) {
+        grammarPoints.push("Capitalize the first letter of your sentence");
+      }
+      if (!/[.!?]$/.test(text.trim())) {
+        grammarPoints.push("End your sentence with punctuation like a period or exclamation mark");
+      }
+      if (/\s{2,}/.test(text)) {
+        grammarPoints.push("Avoid double spaces between words");
+      }
+
+      if (foundHarsh) {
+        let grammarFeedback = targetLang === 'cantonese' ? "你嘅語法睇落冇問題，但係我哋先改下啲措辭啦！🌸" : 
+                             targetLang === 'mandarin' ? "你的语法看起来没问题，但是我们先改一下措辞吧！🌸" :
+                             "Your grammar looks fine, but let's fix the wording first! 🌸";
+        if (grammarPoints.length > 0) {
+          grammarFeedback = targetLang === 'cantonese' ? `同埋，有個寫作小貼士：試下 ${grammarPoints[0].toLowerCase()}。` : 
+                           targetLang === 'mandarin' ? `而且，有个写作小贴士：试着 ${grammarPoints[0].toLowerCase()}。` :
+                           `Also, a quick writing tip: try to ${grammarPoints[0].toLowerCase()}.`;
+        }
+        return {
+          isEmpathetic: false,
+          feedback: targetLang === 'cantonese' 
+            ? `[内容與用詞]：盡量避免好似「${foundHarsh}」呢類負面標籤。試下表達理解先啦！🌸\n\n[語法檢查]：${grammarFeedback}`
+            : targetLang === 'mandarin'
+            ? `[内容与用词]：尽量避免像“${foundHarsh}”这类负面标签。试着表达理解吧！🌸\n\n[语法检查]：${grammarFeedback}`
+            : `[Content & Word Choices]: Try to avoid negative labels like "${foundHarsh}". Express understanding instead! 🌸\n\n[Grammar Check]: ${grammarFeedback}`
+        };
+      }
+
+      if (text.trim().length < 8) {
+        return {
+          isEmpathetic: false,
+          feedback: targetLang === 'cantonese'
+            ? "[内容检查]：呢個係一個好嘅開始，但係我哋試下寫長啲、溫塊啲嘅句子，等 Yuen 真正感受到我哋理解佢嘅感受！❤️\n\n[語法檢查]：繼續努力！"
+            : targetLang === 'mandarin'
+            ? "[内容检查]：这是一个好的开始，但是我们试着写长一点、温暖一点的句子，让 Yuen 真正感受到我们理解他的感受！❤️\n\n[语法检查]：继续努力！"
+            : "[Content Check]: This is a good start, but let's write a slightly longer, warmer sentence to show Yuen we truly understand his feelings! ❤️\n\n[Grammar Check]: Keep it up!"
+        };
+      }
+
+      const successFeedbacks: Record<string, string> = targetLang === 'cantonese' ? {
+        homework: "做得好出色呀！透過主動幫手做數學或者建議休息下，Yuen 會感受到支持而唔係被標籤為懶！💖",
+        sports: "好棒呀！提醒 Yuen 努力先係最重要，仲有提議一齊練習，會令佢覺得自己好強壯同被愛！🏃‍♂️",
+        dinner: "改得好靚！問下佢係咪唔舒服，或者提議試一小口，表現出你對佢感受嘅深度理解！🍲",
+        bedroom: "太好喇！提議一齊執房或者問佢係咪攰，將家務變成一個合作、親切嘅時刻！🧹",
+        test: "做得太好喇！肯定佢嘅努力，並承諾下次一齊溫書，可以建立佢嘅信心，表現出無條件嘅愛！📝",
+        vase: "太精彩喇！先檢查佢有冇受傷，表現出佢嘅安全比任何碎咗嘅嘢都重要。Yuen 同你一齊會覺得好安全！🏺"
+      } : targetLang === 'mandarin' ? {
+        homework: "做得真出色！通过主动帮忙做数学或者建议休息一下，Yuen 会感受到支持而不是被贴上懒惰的标签！💖",
+        sports: "太棒了！提醒 Yuen 努力才是最重要的，并提议一起练习，会让他觉得强壮且被爱！🏃‍♂️",
+        dinner: "改得真好！问下他是不是不舒服，或者提议尝一小口，表现出你对他感受的深度理解！🍲",
+        bedroom: "太好了！提议一起打扫房间或者问他是不是累了，把家务变成一个合作且亲切的时刻！🧹",
+        test: "做得太好了！肯定他的努力，并承诺下次一起温习，可以建立他的信心，表现出无条件的爱！📝",
+        vase: "太精彩了！先检查他有没有受伤，表现出他的安全比任何碎了的东西都重要。Yuen 和你在一起会觉得很安全！🏺"
+      } : {
+        homework: "What a wonderful response! By offering to help with math or suggesting a break, Yuen feels supported instead of lazy! 💖",
+        sports: "Excellent! Reminding Yuen that effort is what matters and offering to practice together makes him feel strong and loved! 🏃‍♂️",
+        dinner: "Beautifully rewritten! Asking if he doesn't feel well or offering to try a small bite shows deep understanding of his feelings! 🍲",
+        bedroom: "Fantastic! Offering to clean up together or asking if he's tired turns a chore into a collaborative, kind moment! 🧹",
+        test: "Amazing job! Acknowledging his effort and promising to study together next time builds his confidence and shows unconditional love! 📝",
+        vase: "Spectacular! Checking if he is hurt first shows that his safety is much more important than any broken object. Yuen will feel so safe with you! 🏺"
+      };
+
+      const defaultFeedback = targetLang === 'cantonese' 
+        ? "你嘅回應睇落好正呀！好出色嘅溫暖、支持同有同理心嘅詞語選擇。Yuen 覺得舒服好多喇！💖"
+        : targetLang === 'mandarin'
+        ? "你的回应看起来真棒！非常出色且充满温情、支持和同理心的词语选择。Yuen 觉得舒服多了！💖"
+        : "Your response looks wonderful! Excellent choice of warm, supportive, and empathetic words. Yuen feels so much better! 💖";
+      
+      let grammarText = targetLang === 'cantonese' ? "你嘅拼寫同語法都好完美！寫得好出色！📝" : 
+                        targetLang === 'mandarin' ? "你的拼写和语法都很完美！写得非常出色！📝" :
+                        "Your spelling and grammar are perfect! Excellent writing! 📝";
+      if (grammarPoints.length > 0) {
+        grammarText = targetLang === 'cantonese'
+          ? `你嘅信息好靚好關心！只係有一個細微嘅寫作貼士：試下 ${grammarPoints.join(" 同埋 ").toLowerCase()}，令到件作品更加完美。📝`
+          : targetLang === 'mandarin'
+          ? `你的信息很美且充满关怀！只是有一个细微的写作贴士：试着 ${grammarPoints.join(" 以及 ").toLowerCase()}，让作品更完美。📝`
+          : `Your message is beautiful and caring! Just a tiny writing tip: try to ${grammarPoints.join(" and ").toLowerCase()} to make it even more pristine. 📝`;
+      }
+
+      return {
+        isEmpathetic: true,
+        feedback: targetLang === 'cantonese'
+          ? `[内容與用詞]：${successFeedbacks[scenarioId] || defaultFeedback}\n\n[語法檢查]：${grammarText}`
+          : targetLang === 'mandarin'
+          ? `[内容与用词]：${successFeedbacks[scenarioId] || defaultFeedback}\n\n[语法检查]：${grammarText}`
+          : `[Content & Word Choices]: ${successFeedbacks[scenarioId] || defaultFeedback}\n\n[Grammar Check]: ${grammarText}`
+      };
+    };
+
     try {
       const { id, complaint, advice, userInput } = req.body;
 
       if (!userInput || userInput.trim().length < 4) {
         return res.json({ 
           isEmpathetic: false, 
-          feedback: "Please write a more thoughtful response of at least 4 letters! 💖" 
+          feedback: targetLang === 'cantonese' ? "請寫一個更有誠意、至少4個字嘅回應！💖" : 
+                    targetLang === 'mandarin' ? "请写一个更有诚意、至少4个汉字的回应！💖" :
+                    "Please write a more thoughtful response of at least 4 letters! 💖" 
         });
       }
-
-      // Local fallback generator for empathy evaluation
-      const getOfflineFeedback = (scenarioId: string, text: string) => {
-        const lowerInput = text.toLowerCase();
-        const generalHarshWords = ["lazy", "picky", "weak", "terrible", "disgusting", "untidy", "stupid", "dumb", "clumsy", "careless", "bad"];
-        const scenarioHarshWords: Record<string, string[]> = {
-          homework: ["lazy", "slacker", "slow", "stupid", "dumb"],
-          sports: ["weak", "slow", "loser", "useless", "terrible"],
-          dinner: ["picky", "spoiled", "stubborn", "disgusting"],
-          bedroom: ["terrible", "messy", "pig", "untidy", "dirty"],
-          test: ["stupid", "dumb", "idiot", "bad", "disappointed"],
-          vase: ["clumsy", "careless", "stupid", "troublemaker"]
-        };
-
-        const currentHarshWords = scenarioHarshWords[scenarioId] || generalHarshWords;
-        const foundHarsh = currentHarshWords.find(w => lowerInput.includes(w)) || 
-                           generalHarshWords.find(w => lowerInput.includes(w));
-
-        // Simple writing/grammar check
-        const grammarPoints: string[] = [];
-        if (text[0] !== text[0].toUpperCase()) {
-          grammarPoints.push("Capitalize the first letter of your sentence");
-        }
-        if (!/[.!?]$/.test(text.trim())) {
-          grammarPoints.push("End your sentence with punctuation like a period or exclamation mark");
-        }
-        if (/\s{2,}/.test(text)) {
-          grammarPoints.push("Avoid double spaces between words");
-        }
-
-        if (foundHarsh) {
-          let grammarFeedback = "Your grammar looks fine, but let's fix the wording first! 🌸";
-          if (grammarPoints.length > 0) {
-            grammarFeedback = `Also, a quick writing tip: try to ${grammarPoints[0].toLowerCase()}.`;
-          }
-          return {
-            isEmpathetic: false,
-            feedback: `[Content & Word Choices]: Try to avoid negative labels like "${foundHarsh}". Express understanding instead! 🌸\n\n[Grammar Check]: ${grammarFeedback}`
-          };
-        }
-
-        if (text.trim().length < 8) {
-          return {
-            isEmpathetic: false,
-            feedback: "[Content Check]: This is a good start, but let's write a slightly longer, warmer sentence to show Yuen we truly understand his feelings! ❤️\n\n[Grammar Check]: Keep it up!"
-          };
-        }
-
-        const successFeedbacks: Record<string, string> = {
-          homework: "What a wonderful response! By offering to help with math or suggesting a break, Yuen feels supported instead of lazy! 💖",
-          sports: "Excellent! Reminding Yuen that effort is what matters and offering to practice together makes him feel strong and loved! 🏃‍♂️",
-          dinner: "Beautifully rewritten! Asking if he doesn't feel well or offering to try a small bite shows deep understanding of his feelings! 🍲",
-          bedroom: "Fantastic! Offering to clean up together or asking if he's tired turns a chore into a collaborative, kind moment! 🧹",
-          test: "Amazing job! Acknowledging his effort and promising to study together next time builds his confidence and shows unconditional love! 📝",
-          vase: "Spectacular! Checking if he is hurt first shows that his safety is much more important than any broken object. Yuen will feel so safe with you! 🏺"
-        };
-
-        const defaultFeedback = "Your response looks wonderful! Excellent choice of warm, supportive, and empathetic words. Yuen feels so much better! 💖";
-        
-        let grammarText = "Your spelling and grammar are perfect! Excellent writing! 📝";
-        if (grammarPoints.length > 0) {
-          grammarText = `Your message is beautiful and caring! Just a tiny writing tip: try to ${grammarPoints.join(" and ").toLowerCase()} to make it even more pristine. 📝`;
-        }
-
-        return {
-          isEmpathetic: true,
-          feedback: `[Content & Word Choices]: ${successFeedbacks[scenarioId] || defaultFeedback}\n\n[Grammar Check]: ${grammarText}`
-        };
-      };
 
       // Try calling Agnes API
       let result;
@@ -129,15 +179,22 @@ async function startServer() {
 Evaluate the student's rewritten parent sentence for empathy, word choice, and grammatical correctness.
 
 Your feedback must evaluate three aspects:
-1. Content and Structure (内容与结构): Praise if they offered warm support, constructive advice, or a collaborative solution. Gentle guidance if not.
-2. Word Choices (用词): Praise positive, warm, and gentle words. Gently warn against negative labels (e.g. lazy, weak, picky, terrible, untidy, disgusting).
-3. Grammatical Correctness (语法正确性): Praise if there are no errors, or gently and sweetly point out spelling/grammar/punctuation mistakes.
+1. Content and Structure: Praise if they offered warm support, constructive advice, or a collaborative solution. Gentle guidance if not.
+2. Word Choices: Praise positive, warm, and gentle words. Gently warn against negative labels (e.g. lazy, weak, picky, terrible, untidy, disgusting).
+3. Grammatical Correctness: Praise if there are no errors, or gently and sweetly point out spelling/grammar/punctuation mistakes.
+
+IMPORTANT: 
+- Use "同学" (Student) to address the user. 
+- NEVER use intimate terms like "宝贝" (Baby), "亲爱的" (Dear), or "心肝".
+- Respond STRICTLY in the target language requested below.
+Current Target Language: ${targetLang === 'cantonese' ? "TRADITIONAL CANTONESE (粤语/繁体中文) - Tone: Kind Hong Kong teacher" : targetLang === 'mandarin' ? "SIMPLIFIED MANDARIN (普通话/简体中文) - Tone: Kind Southern Chinese teacher (gentle and soft)" : "WARM, SIMPLE ENGLISH - Tone: Kind English teacher"}
 
 Respond STRICTLY in JSON format matching this schema:
 {
-  "isEmpathetic": boolean (true if the response is caring and supportive, and has no severe grammar errors that ruin understanding; false if it contains negative labels, harsh criticisms, or severe errors),
-  "feedback": "string (a super warm, direct feedback in simple English suitable for children, maximum 3 sentences. Separate your feedback into clear sections for [Content & Word Choices] and [Grammar Check]. Speak directly to the student!)"
-}`
+  "isEmpathetic": boolean (true if the response is caring and supportive; false if it contains negative labels or harsh criticisms),
+  "feedback": "string (a super warm feedback, maximum 3 sentences. Separate your feedback into clear sections for [Content & Word Choices] and [Grammar Check]. Speak directly to the student! PROVIDE THIS ENTIRE STRING IN THE TARGET LANGUAGE ABOVE.)"
+}
+Note: If the target language is Cantonese or Mandarin, translate the headers like [Content & Word Choices] and [Grammar Check] to [内容与用词] and [语法检查].`
               },
               {
                 role: "user",
@@ -189,13 +246,17 @@ Student's proposed rewritten response: "${userInput}"`
              - Content and Structure: Does it express warmth and offer to help together instead of criticizing?
              - Word Choices: Does it use positive words and avoid negative labels (like lazy, picky, weak, terrible, untidy)?
              - Grammatical Correctness: Are there any minor typos or errors? Gently point them out.
-          2. Respond STRICTLY in JSON format matching this schema:
+          2. Language Preference:
+             ${targetLang === 'cantonese' ? "IMPORTANT: Provide all your feedback in TRADITIONAL CANTONESE (粤语/繁体中文), specifically in the tone of a kind Hong Kong teacher." : targetLang === 'mandarin' ? "IMPORTANT: Provide all your feedback in SIMPLIFIED MANDARIN (普通话/简体中文), specifically in the tone of a kind teacher." : "IMPORTANT: Provide all your feedback in WARM, SIMPLE ENGLISH suitable for children."}
+          3. Respond STRICTLY in JSON format matching this schema:
              - "isEmpathetic": boolean (true if the response is caring and supportive, false if it is harsh or contains negative labels)
-             - "feedback": string (a short, super warm, and encouraging explanation or gentle hint in simple English, maximum 3 sentences. Separate into a commented feedback for [Content & Word Choices] and [Grammar Check]. Speak directly to the student!)
+             - "feedback": string (a short, super warm, and encouraging explanation or gentle hint, maximum 3 sentences. Separate into a commented feedback for [Content & Word Choices] and [Grammar Check]. Speak directly to the student! PROVIDE THIS ENTIRE STRING IN THE TARGET LANGUAGE ABOVE.)
+          
+          Note: If the target language is Cantonese or Mandarin, translate the headers like [Content & Word Choices] and [Grammar Check] to [内容与用词] and [语法检查] (or [內容與用詞] and [語法檢查] for Traditional).
         `;
 
         const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
+          model: "gemini-3.8-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -218,72 +279,7 @@ Student's proposed rewritten response: "${userInput}"`
     } catch (error: any) {
       console.error("Error checking empathy, running local fallback evaluation:", error);
       const { id, userInput } = req.body;
-      const getOfflineFeedback = (scenarioId: string, text: string) => {
-        const lowerInput = text.toLowerCase();
-        const generalHarshWords = ["lazy", "picky", "weak", "terrible", "disgusting", "untidy", "stupid", "dumb", "clumsy", "careless", "bad"];
-        const scenarioHarshWords: Record<string, string[]> = {
-          homework: ["lazy", "slacker", "slow", "stupid", "dumb"],
-          sports: ["weak", "slow", "loser", "useless", "terrible"],
-          dinner: ["picky", "spoiled", "stubborn", "disgusting"],
-          bedroom: ["terrible", "messy", "pig", "untidy", "dirty"],
-          test: ["stupid", "dumb", "idiot", "bad", "disappointed"],
-          vase: ["clumsy", "careless", "stupid", "troublemaker"]
-        };
-
-        const currentHarshWords = scenarioHarshWords[scenarioId] || generalHarshWords;
-        const foundHarsh = currentHarshWords.find(w => lowerInput.includes(w)) || 
-                           generalHarshWords.find(w => lowerInput.includes(w));
-
-        const grammarPoints: string[] = [];
-        if (text[0] !== text[0].toUpperCase()) {
-          grammarPoints.push("Capitalize the first letter of your sentence");
-        }
-        if (!/[.!?]$/.test(text.trim())) {
-          grammarPoints.push("End your sentence with punctuation like a period or exclamation mark");
-        }
-        if (/\s{2,}/.test(text)) {
-          grammarPoints.push("Avoid double spaces between words");
-        }
-
-        if (foundHarsh) {
-          let grammarFeedback = "Your grammar looks fine, but let's fix the wording first! 🌸";
-          if (grammarPoints.length > 0) {
-            grammarFeedback = `Also, a quick writing tip: try to ${grammarPoints[0].toLowerCase()}.`;
-          }
-          return {
-            isEmpathetic: false,
-            feedback: `[Content & Word Choices]: Try to avoid negative labels like "${foundHarsh}". Express understanding instead! 🌸\n\n[Grammar Check]: ${grammarFeedback}`
-          };
-        }
-
-        if (text.trim().length < 8) {
-          return {
-            isEmpathetic: false,
-            feedback: "[Content Check]: This is a good start, but let's write a slightly longer, warmer sentence to show Yuen we truly understand his feelings! ❤️\n\n[Grammar Check]: Keep it up!"
-          };
-        }
-
-        const successFeedbacks: Record<string, string> = {
-          homework: "What a wonderful response! By offering to help with math or suggesting a break, Yuen feels supported instead of lazy! 💖",
-          sports: "Excellent! Reminding Yuen that effort is what matters and offering to practice together makes him feel strong and loved! 🏃‍♂️",
-          dinner: "Beautifully rewritten! Asking if he doesn't feel well or offering to try a small bite shows deep understanding of his feelings! 🍲",
-          bedroom: "Fantastic! Offering to clean up together or asking if he's tired turns a chore into a collaborative, kind moment! 🧹",
-          test: "Amazing job! Acknowledging his effort and promising to study together next time builds his confidence and shows unconditional love! 📝",
-          vase: "Spectacular! Checking if he is hurt first shows that his safety is much more important than any broken object. Yuen will feel so safe with you! 🏺"
-        };
-
-        const defaultFeedback = "Your response looks wonderful! Excellent choice of warm, supportive, and empathetic words. Yuen feels so much better! 💖";
-        
-        let grammarText = "Your spelling and grammar are perfect! Excellent writing! 📝";
-        if (grammarPoints.length > 0) {
-          grammarText = `Your message is beautiful and caring! Just a tiny writing tip: try to ${grammarPoints.join(" and ").toLowerCase()} to make it even more pristine. 📝`;
-        }
-
-        return {
-          isEmpathetic: true,
-          feedback: `[Content & Word Choices]: ${successFeedbacks[scenarioId] || defaultFeedback}\n\n[Grammar Check]: ${grammarText}`
-        };
-      };
+      // We use the getOfflineFeedback defined at the top of the route scope
       res.json(getOfflineFeedback(id, userInput));
     }
   });
@@ -633,24 +629,42 @@ Student's proposed rewritten response: "${userInput}"`
     res.json({ imageUrl: imageBase64 });
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  const distPath = path.resolve(process.cwd(), 'dist');
+  const publicImagesPath = path.resolve(process.cwd(), 'public/images');
+  const distImagesPath = path.join(distPath, 'images');
+
+  // Ensure images are served from dist or public in both dev and production
+  if (fs.existsSync(publicImagesPath)) {
+    app.use('/images', express.static(publicImagesPath));
+  }
+  if (fs.existsSync(distImagesPath)) {
+    app.use('/images', express.static(distImagesPath));
+  }
+
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isDev = process.env.NODE_ENV === "development" || (process.env.NODE_ENV !== "production" && !hasDist);
+
+  // Vite middleware for development; static dist serving for production
+  if (isDev) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (mode: ${isDev ? 'development' : 'production'})`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Fatal error starting server:", err);
+  process.exit(1);
+});

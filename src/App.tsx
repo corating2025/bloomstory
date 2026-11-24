@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, Heart, Mic, MicOff, RefreshCw, 
   Droplet, Sun, Sprout, Send, Terminal, Shield, CheckCircle,
-  Download, FileImage, Gift
+  Download, FileImage, Gift, Play, Pause, Square
 } from 'lucide-react';
 
 declare global {
@@ -29,15 +29,15 @@ interface MatchCard {
 
 // 9 Illustrated WebP Links exactly specified by the user
 const vocabularyDatabase: VocabularyItem[] = [
-  { value: 'wonderful', isPositive: true, img: '/IMAGES/WONDERFUL.png' },
-  { value: 'beautiful', isPositive: true, img: '/IMAGES/BEAUTIFUL.png' },
-  { value: 'kind', isPositive: true, img: '/IMAGES/KIND.png' },
-  { value: 'caring', isPositive: true, img: '/IMAGES/CARING.png' },
-  { value: 'helpful', isPositive: true, img: '/IMAGES/HELPFUL.png' },
-  { value: 'silly', isPositive: false, img: '/IMAGES/SILLY.png' },
-  { value: 'ugly', isPositive: false, img: '/IMAGES/UGLY.png' },
-  { value: 'mean', isPositive: false, img: '/IMAGES/MEAN.png' },
-  { value: 'unhelpful', isPositive: false, img: '/IMAGES/UNHELPFUL.png' }
+  { value: 'wonderful', isPositive: true, img: '/images/wonderful.png' },
+  { value: 'beautiful', isPositive: true, img: '/images/beautiful.png' },
+  { value: 'kind', isPositive: true, img: '/images/kind.png' },
+  { value: 'caring', isPositive: true, img: '/images/caring.png' },
+  { value: 'helpful', isPositive: true, img: '/images/helpful.png' },
+  { value: 'silly', isPositive: false, img: '/images/silly.png' },
+  { value: 'ugly', isPositive: false, img: '/images/ugly.png' },
+  { value: 'mean', isPositive: false, img: '/images/mean.png' },
+  { value: 'unhelpful', isPositive: false, img: '/images/unhelpful.png' }
 ];
 
 // Fallback graphics and aesthetics in case the image fails to load
@@ -214,6 +214,9 @@ export default function App() {
     cleaning: '',
     bedtime: ''
   });
+  const [feedbackLanguage, setFeedbackLanguage] = useState<'english' | 'cantonese' | 'mandarin'>('english');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
 
   // Step 5: Thanks Card State & Prompt Builder
   const [step5Message, setStep5Message] = useState<string>('Thank you very much for being so patient and supportive. I feel so lucky to have you as my English teacher.');
@@ -283,6 +286,8 @@ export default function App() {
   // Sync initialization
   useEffect(() => {
     initMatchGame();
+    // Welcome message on load
+    speakText('Welcome to Bloom! Help me recover by following the steps below.', 'english');
   }, []);
 
   const writeToTerminal = (text: string) => {
@@ -336,28 +341,106 @@ export default function App() {
     }
   };
 
-  const textToSpeech = (text: string) => {
+  const speakText = (text: string, forceLang?: 'english' | 'mandarin' | 'cantonese') => {
     if ('speechSynthesis' in window) {
       try {
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'en-GB';
-        utterance.rate = 0.85;
+        
+        // Remove markdown headers and emojis for smoother speech
+        const cleanText = text
+          .replace(/\[[^\]]+\]:?\s*/g, '') 
+          .replace(/⚠️|❤️|✨|🌸|💧|😭|🥺|😊|🥰|😭|🔥/g, '')
+          .trim();
+
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        const voices = window.speechSynthesis.getVoices();
+        
+        const langToUse = forceLang || feedbackLanguage;
+
+        if (langToUse === 'cantonese') {
+          utterance.lang = 'zh-HK';
+          // Find authentic Cantonese voice (Sin-ji or Hiu-Maan are natural)
+          const hkVoice = voices.find(v => (v.lang.includes('HK') || v.lang.includes('yue')) && (v.name.includes('Sin-ji') || v.name.includes('HiuMaan') || v.name.includes('Premium') || v.name.includes('Google')))
+                          || voices.find(v => v.lang.includes('HK'));
+          if (hkVoice) utterance.voice = hkVoice;
+          utterance.rate = 1.0; 
+          utterance.pitch = 1.0;
+        } else if (langToUse === 'mandarin') {
+          utterance.lang = 'zh-CN';
+          // Prioritize Yunxi as requested, fallback to other natural voices
+          const cnVoice = voices.find(v => v.name.includes('Yunxi'))
+                          || voices.find(v => (v.lang.includes('CN') || v.lang.includes('Hans')) && (v.name.includes('Xiaoxiao') || v.name.includes('Premium') || v.name.includes('Google')))
+                          || voices.find(v => v.lang.includes('zh'));
+          if (cnVoice) utterance.voice = cnVoice;
+          utterance.rate = 0.95;
+          utterance.pitch = 1.0;
+        } else {
+          utterance.lang = 'en-GB';
+          const enVoice = voices.find(v => v.lang.includes('GB') && (v.name.includes('Premium') || v.name.includes('Google')))
+                          || voices.find(v => v.lang.includes('GB') || v.lang.includes('en'));
+          if (enVoice) utterance.voice = enVoice;
+          utterance.rate = 0.9;
+          utterance.pitch = 1.1;
+        }
+
+        utterance.onstart = () => {
+          setIsSpeaking(true);
+          setIsPaused(false);
+        };
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+        };
+        utterance.onerror = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+        };
+        
         window.speechSynthesis.speak(utterance);
       } catch (e) {
         console.error(e);
+        setIsSpeaking(false);
       }
     }
   };
 
-  // Nav across panels with Auto-Bypass
+  const pauseSpeech = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.pause();
+      setIsSpeaking(false);
+      setIsPaused(true);
+    }
+  };
+
+  const resumeSpeech = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.resume();
+      setIsSpeaking(true);
+      setIsPaused(false);
+    }
+  };
+
+  const stopSpeech = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      setIsPaused(false);
+    }
+  };
+
+  // Nav across panels with Auto-Growth for later steps
   const handleStepSwitch = (stepNum: 1 | 2 | 3 | 4 | 5) => {
     setActiveStep(stepNum);
-    if ((stepNum === 2 || stepNum === 3 || stepNum === 4 || stepNum === 5) && step1Stage < 4) {
-      setStep1Stage(4);
+    // If navigating to Step 5, make plant a bit sad so user can "heal" it with the card
+    if (stepNum === 5 && plantStage !== 5) {
+      setPlantStage(6);
+      writeToTerminal("Workspace set to Step 5. Yuen's plant is feeling a bit sad... let's cheer it up with a card!");
+    } else if (stepNum >= 2 && plantStage < 4) {
+      // If navigating to other later steps, ensure plant is at least grown (Stage 4) so interactions work
       setPlantStage(4);
+      setStep1Stage(4);
       setPhysicalState({ water: true, soil: true, sun: true });
-      writeToTerminal('Curriculum Auto-Bypass: Plant physical care complete. READY FOR WORDS OF EMPATHY!');
+      writeToTerminal(`Auto-Growth: Plant prepared for Step ${stepNum} interactions.`);
     } else {
       writeToTerminal(`Workspace set to Step ${stepNum}.`);
     }
@@ -369,7 +452,16 @@ export default function App() {
     playSoundEffect('action');
     setSpeechBubble('I am so dry... Please water me! 💧');
     writeToTerminal('Diagnostic: Plant is dry & thirsty.');
-    textToSpeech('I am so dry. Please water me.');
+    speakText('I am so dry. Please water me.', 'english');
+  };
+
+  const resetStep1Care = () => {
+    setStep1Stage(0);
+    setPlantStage(1);
+    setPhysicalState({ water: false, soil: false, sun: false });
+    setSpeechBubble('Welcome! Help me recover...');
+    writeToTerminal('Plant care reset. You can now repeat the physical revival process.');
+    speakText('Welcome! Help me recover...', 'english');
   };
 
   // Physical Care nutrients validation engine
@@ -384,12 +476,12 @@ export default function App() {
         setPlantStage(2);
         setSpeechBubble('Ah, water feels amazing! But my soil is empty... I need Fertilizer! 🪱🍂');
         writeToTerminal('Water applied! Sprouting break soil.');
-        textToSpeech('Ah, water feels amazing! But my soil is empty. I need Fertilizer.');
+        speakText('Ah, water feels amazing! But my soil is empty. I need Fertilizer.', 'english');
       } else {
         playSoundEffect('cry');
         triggerErrorFace();
         setSpeechBubble('Ouch! Incorrect. roots dry, I need Water first! 💧');
-        textToSpeech('Ouch! That is incorrect. My roots are dry, I need Water first.');
+        speakText('Ouch! That is incorrect. My roots are dry, I need Water first.', 'english');
       }
     } else if (step1Stage === 2) {
       if (type === 'soil') {
@@ -401,12 +493,12 @@ export default function App() {
         setPlantStage(3);
         setSpeechBubble('Rich food! stronger stronger! too dark... I need Sunlight! ☀️');
         writeToTerminal('Fertilizer applied! Stem rising.');
-        textToSpeech('Rich food! I am growing stronger, but it is too dark. I need Sunlight.');
+        speakText('Rich food! I am growing stronger, but it is too dark. I need Sunlight.', 'english');
       } else {
         playSoundEffect('cry');
         triggerErrorFace();
         setSpeechBubble('No, no! My soil empty. I need rich Fertilizer strong stem! 🪱🍂');
-        textToSpeech('No, no! My soil is empty. I need rich Fertilizer to grow a strong stem.');
+        speakText('No, no! My soil is empty. I need rich Fertilizer to grow a strong stem.', 'english');
       }
     } else if (step1Stage === 3) {
       if (type === 'sun') {
@@ -418,12 +510,12 @@ export default function App() {
         setPlantStage(4);
         setSpeechBubble('Amazing! warmth... thank you for reviving me! 🌿');
         writeToTerminal('Solar energy triggered maturity. Step 1 COMPLETE.');
-        textToSpeech('Amazing! Thank you for reviving me.');
+        speakText('Amazing! Thank you for reviving me.', 'english');
       } else {
         playSoundEffect('cry');
         triggerErrorFace();
         setSpeechBubble('Oops! wrong. have water and food, now I need warm Sunlight! ☀️');
-        textToSpeech('Oops! That is wrong. I have water and food, now I need warm Sunlight.');
+        speakText('Oops! That is wrong. I have water and food, now I need warm Sunlight.', 'english');
       }
     }
   };
@@ -441,7 +533,8 @@ export default function App() {
     writeToTerminal(`System analyzing student speech pattern: "${sentence}"`);
     setLastHeard(sentence);
     
-    if (step1Stage < 4) {
+    // Allow interactions if in Step 2+ even if Step 1 sequence wasn't followed manually
+    if (activeStep < 2 && step1Stage < 4) {
       writeToTerminal(`⚠️ weak plant ignored spoken words! FINISH STEP 1 first!`);
       playSoundEffect('cry');
       return;
@@ -485,7 +578,7 @@ export default function App() {
   const bloomPlant = (sentence: string, matchedWord?: string) => {
     setPlantStage(5); 
     playSoundEffect('bloom'); 
-    textToSpeech(sentence);
+    speakText(sentence);
     setShowSparkles(true);
     setTimeout(() => setShowSparkles(false), 3000);
     const displayWord = matchedWord ? `"${matchedWord}"` : 'your kind words';
@@ -496,7 +589,7 @@ export default function App() {
   const cryPlant = (sentence: string, matchedWord?: string) => {
     setPlantStage(6); 
     playSoundEffect('cry'); 
-    textToSpeech(sentence);
+    speakText(sentence);
     const displayWord = matchedWord ? `"${matchedWord}"` : 'hurtful words';
     setSpeechBubble(`Ouch... Speaking ${displayWord} makes my leaves wither. Please use gentle words! 💔🥀`);
     writeToTerminal(`💔 Sad event! hurt spoken words carried bad standard energy: "${sentence}".`);
@@ -690,7 +783,7 @@ export default function App() {
       emoji: '📚✏️',
       advice: 'Dad is angry and uses the negative label "LAZY". Yuen feels pressured and sad. How could Dad say this with empathy?',
       suggestedPlaceholder: 'e.g., "Math can be tough, Yuen. Do you need a short break or some help?"',
-      img: '/IMAGES/01.png'
+      img: '/images/01.png'
     },
     {
       id: 'dinner',
@@ -701,7 +794,7 @@ export default function App() {
       emoji: '🍲🥦',
       advice: 'Mom labels Yuen as "PICKY" and tries to guilt-trip him. Yuen feels ashamed. How could Mom express understanding about his appetite?',
       suggestedPlaceholder: 'e.g., "I know you don\'t like this vegetable. How about we try just three small bites?"',
-      img: '/IMAGES/02.png'
+      img: '/images/02.png'
     },
     {
       id: 'sports',
@@ -712,7 +805,7 @@ export default function App() {
       emoji: '🏃‍♂️⏱️',
       advice: 'Mom yells "WEAK" and demands more effort. Yuen is already running his hardest and feels exhausted. How could Mom cheer his effort?',
       suggestedPlaceholder: 'e.g., "You are working so hard out there! I am proud of your effort, Yuen!"',
-      img: '/IMAGES/03.png'
+      img: '/images/03.png'
     },
     {
       id: 'piano',
@@ -723,7 +816,7 @@ export default function App() {
       emoji: '🎹🎵',
       advice: 'Mom harshly calls his play "TERRIBLE". Yuen feels helpless and starts crying. How could Mom encourage him to try again gently?',
       suggestedPlaceholder: 'e.g., "That was a tricky part! Let\'s slow down and practice this melody together."',
-      img: '/IMAGES/04.png'
+      img: '/images/04.png'
     },
     {
       id: 'cleaning',
@@ -734,7 +827,7 @@ export default function App() {
       emoji: '🧹🧸',
       advice: 'Dad shouts "DISGUSTING" and "UNTIDY". Yuen is overwhelmed by the mess. How could Dad guide him to clean up supportively?',
       suggestedPlaceholder: 'e.g., "There are many toys here! Let\'s clean them up together. Which box should we start with?"',
-      img: '/IMAGES/05.png'
+      img: '/images/05.png'
     },
     {
       id: 'bedtime',
@@ -745,7 +838,7 @@ export default function App() {
       emoji: '🛌🌙',
       advice: 'Yuen lies awake feeling unloved and anxious. Write a healing, comforting message of empathy directly to Yuen to help him feel valued.',
       suggestedPlaceholder: 'e.g., "Yuen, you are not weak or lazy. You are trying your best, and your effort is beautiful."',
-      img: '/IMAGES/06.png'
+      img: '/images/06.png'
     }
   ];
 
@@ -753,8 +846,13 @@ export default function App() {
     const text = step4Inputs[key];
     if (text.trim().length < 4) {
       playSoundEffect('cry');
-      const errText = 'Please write a more thoughtful response of at least 4 letters! 💖';
+      const errText = feedbackLanguage === 'cantonese'
+        ? '同學，請寫一個更有誠意、至少4個字嘅回應！💖'
+        : feedbackLanguage === 'mandarin'
+        ? '同学，请写一个更有诚意、至少4个汉字的回应！💖'
+        : 'Please write a more thoughtful response of at least 4 letters! 💖';
       setSpeechBubble(errText);
+      speakText(errText);
       setStep4Feedbacks(prev => ({ ...prev, [key]: errText }));
       return;
     }
@@ -766,8 +864,13 @@ export default function App() {
 
     if (foundWord) {
       playSoundEffect('cry');
-      const errorMsg = `⚠️ Oops! You included a negative label or expression: "${foundWord}". True empathy means helping children feel understood rather than labeling them. Try rewriting it with positive, warm words! ❤️`;
+      const errorMsg = feedbackLanguage === 'cantonese'
+        ? `⚠️ 同學，哎呀！你用咗一個負面嘅標籤：「${foundWord}」。真正嘅同理心係幫小朋友感受到被理解，唔好貼標籤呀。試下用溫暖嘅字眼重寫啦！❤️`
+        : feedbackLanguage === 'mandarin'
+        ? `⚠️ 同学，哎呀！你使用了一个负面的标签：“${foundWord}”。真正的同理心是帮小朋友感受到被理解，而不是贴标签。试着用温暖、正面的词语重写吧！❤️`
+        : `⚠️ Oops! You included a negative label: "${foundWord}". True empathy means helping children feel understood rather than labeling them. Try rewriting it with positive, warm words! ❤️`;
       setSpeechBubble(errorMsg);
+      speakText(errorMsg);
       setStep4Feedbacks(prev => ({ ...prev, [key]: errorMsg }));
       writeToTerminal(`[Step 4] Empathy check failed: contained negative label "${foundWord}".`);
       return;
@@ -784,13 +887,19 @@ export default function App() {
           id: key,
           complaint: scenario?.parentComplaint || "",
           advice: scenario?.advice || "",
-          userInput: text
+          userInput: text,
+          language: feedbackLanguage
         })
       });
 
       const result = await response.json();
       setStep4Checking(prev => ({ ...prev, [key]: false }));
       setStep4Feedbacks(prev => ({ ...prev, [key]: result.feedback || '' }));
+      
+      // Read out the feedback automatically
+      if (result.feedback) {
+        speakText(result.feedback);
+      }
 
       if (result.isEmpathetic) {
         setStep4Submitted(prev => {
@@ -805,7 +914,7 @@ export default function App() {
             setPlantStage(5); // Bloom completely!
             setSpeechBubble('🎉 Incredible! You solved all 6 empathy scenarios with true empathy! I am blooming completely with love! 🌸');
             writeToTerminal('🏆 Congratulations! You successfully transformed all parent language with deep empathy!');
-            textToSpeech('Incredible! You completed all empathy lessons. I am blooming with love.');
+            speakText('Incredible! You completed all empathy lessons. I am blooming with love.');
           } else {
             setSpeechBubble(result.feedback || `Empathetic response accepted! (${submittedCount}/6) Keep helping Yuen! 💖`);
             writeToTerminal(`[Step 4] Empathy accepted for "${key}". Teacher feedback: ${result.feedback}`);
@@ -876,6 +985,7 @@ export default function App() {
       const result = await response.json();
       if (result.imageUrl) {
         setStep5ImageUrl(result.imageUrl);
+        setPlantStage(5); // Bloom after generating card!
         playSoundEffect('bloom');
         setShowSparkles(true);
         setTimeout(() => setShowSparkles(false), 2000);
@@ -1118,21 +1228,23 @@ export default function App() {
 
       const fallbackSvg = generateLocalCustomSvg(cardStyle, cardSticker, cardRecipient);
       setStep5ImageUrl(fallbackSvg);
+      setPlantStage(5); // Bloom after generating card!
       playSoundEffect('bloom');
       setShowSparkles(true);
       setTimeout(() => setShowSparkles(false), 2000);
       setSpeechBubble(`🎉 Presto! I have painted a beautiful watercolor card themed with ${cardStyle} and adorned with ${cardSticker}! 🌸`);
-      writeToTerminal('[Step 5] Thank you card background generated dynamically!');
+      writeToTerminal('[Step 5] Thank you card background generated dynamically! Plant is blooming with happiness!');
     } finally {
       setStep5Generating(false);
     }
   };
 
-  const loadStep5Template = (recipient: string, message: string, style: string, sticker: string) => {
+  const loadStep5Template = (recipient: string, message: string, style: string, sticker: string, sender: string = 'Your loving student') => {
     setCardRecipient(recipient);
     setStep5Message(message);
     setCardStyle(style);
     setCardSticker(sticker);
+    setCardSender(sender);
     playSoundEffect('bloom');
     setSpeechBubble(`Template loaded! Feel free to customize any part! ✨`);
     writeToTerminal(`[Step 5] Pre-filled thank-you card builder template for "${recipient}".`);
@@ -1245,13 +1357,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50 to-teal-100 flex items-center justify-center p-4 font-sans antialiased text-slate-800">
       
-      <div className="max-w-6xl w-full bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border border-emerald-100/50 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
+      <div className="max-w-6xl w-full bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border border-emerald-100/50 grid grid-cols-1 lg:grid-cols-12 relative">
         
         {/* Left Column: Interactive Visual Canvas Stage */}
-        <div className="lg:col-span-5 bg-gradient-to-b from-emerald-100/40 to-teal-50 p-6 flex flex-col justify-between items-center border-b lg:border-b-0 lg:border-r border-emerald-100 relative overflow-hidden">
-          
-          {activeStep === 4 ? (
-            <>
+        <div className="lg:col-span-5 bg-gradient-to-b from-emerald-100/40 to-teal-50 p-6 flex flex-col items-center border-b lg:border-b-0 lg:border-r border-emerald-100 relative">
+          <div className="lg:sticky lg:top-8 w-full flex flex-col items-center">
+            {activeStep === 4 ? (
+              <>
               {/* Interactive Header Metadata for Step 4 */}
               <div className="w-full text-center z-10 animate-fadeIn">
                 <span className="px-3 py-1 bg-indigo-200 text-indigo-800 text-xs font-bold uppercase tracking-wider rounded-full">
@@ -1430,7 +1542,7 @@ export default function App() {
                     style={{ width: `${(Object.values(step4Submitted).filter(Boolean).length / 6) * 100}%` }}
                   ></div>
                 </div>
-
+                
                 {/* List of 6 Scenarios Checklist */}
                 <div className="grid grid-cols-3 gap-1.5 mt-3.5 text-[9px] text-slate-500 font-medium text-left">
                   {step4Scenarios.map((s) => {
@@ -1592,7 +1704,7 @@ export default function App() {
               </div>
             </>
           )}
-          
+          </div>
         </div>
 
         {/* Right Column: Step-by-Step Lesson Panel */}
@@ -1646,9 +1758,21 @@ export default function App() {
             {/* Panel Step 1: Physical Care */}
             {activeStep === 1 && (
               <div id="panel-step-1" className="transition-all duration-300">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">1</span>
-                  <h3 className="font-bold text-slate-700 text-lg">Step 1: Physical Care & Nutrients</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">1</span>
+                    <h3 className="font-bold text-slate-700 text-lg">Step 1: Physical Care & Nutrients</h3>
+                  </div>
+                  {step1Stage > 0 && (
+                    <button 
+                      onClick={resetStep1Care}
+                      className="text-[10px] font-bold text-slate-400 hover:text-rose-500 transition-colors flex items-center gap-1"
+                      title="Reset Plant Care"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      RESET
+                    </button>
+                  )}
                 </div>
                 
                 {step1Stage === 0 ? (
@@ -1705,17 +1829,27 @@ export default function App() {
                 )}
 
                 {step1Stage === 4 && (
-                  <div id="step1-complete-card" className="bg-emerald-100/50 border border-emerald-200 rounded-2xl p-4 text-center mt-4">
+                  <div id="step1-complete-card" className="bg-emerald-100/50 border border-emerald-200 rounded-2xl p-4 text-center mt-4 space-y-3">
                     <p className="text-emerald-800 font-bold text-sm">
                       🎉 You successfully revived the physical plant! It is now ready for empathy and words of kindness.
                     </p>
-                    <button 
-                      type="button" 
-                      onClick={() => handleStepSwitch(2)} 
-                      className="mt-3 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all"
-                    >
-                      Proceed to Step 2: Kindness Words ➔
-                    </button>
+                    <div className="flex flex-col sm:flex-row gap-2 justify-center">
+                      <button 
+                        type="button" 
+                        onClick={() => handleStepSwitch(2)} 
+                        className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                      >
+                        Proceed to Step 2: Kindness Words ➔
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={resetStep1Care} 
+                        className="px-5 py-2 bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 flex items-center justify-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Repeat Plant Care
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1760,7 +1894,7 @@ export default function App() {
                       {/* Positive Words Section */}
                       <div>
                         <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider block mb-3">Positive Adjectives (Evoke Good Feelings)</span>
-                        <div id="explore-positive-grid" class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <div id="explore-positive-grid" className="grid grid-cols-2 md:grid-cols-3 gap-3">
                           {vocabularyDatabase.filter(item => item.isPositive).map(item => (
                             <button 
                               key={item.value}
@@ -1769,21 +1903,11 @@ export default function App() {
                               className="flex flex-col bg-white border border-slate-100 hover:border-emerald-300 hover:shadow-md rounded-2xl p-2 text-center transition-all h-44 justify-between"
                             >
                               <div className="w-full h-32 overflow-hidden rounded-xl bg-slate-50 relative flex items-center justify-center">
-                                {failedImages[item.value] ? (
-                                  <div className={`w-full h-full flex flex-col items-center justify-center rounded-xl bg-gradient-to-br ${fallbackStyling[item.value]?.bg || 'from-slate-50 to-slate-100'} border ${fallbackStyling[item.value]?.border || 'border-slate-200'} relative overflow-hidden shadow-inner`}>
-                                    <span className="text-2xl animate-bounce" style={{ animationDuration: '3.5s' }}>
-                                      {fallbackStyling[item.value]?.emoji || '✨'}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <img 
-                                    src={item.img} 
-                                    alt={item.value} 
-                                    className="w-full h-full object-cover" 
-                                    referrerPolicy="no-referrer"
-                                    onError={() => handleImageError(item.value)}
-                                  />
-                                )}
+                                <img 
+                                  src={`${item.img}?v=2`} 
+                                  alt={item.value} 
+                                  className="w-full h-full object-cover" 
+                                />
                               </div>
                               <span className="text-xs font-bold text-emerald-800 capitalize mt-1">{item.value}</span>
                             </button>
@@ -1794,7 +1918,7 @@ export default function App() {
                       {/* Negative Words Section */}
                       <div>
                         <span className="text-xs font-bold text-rose-600 uppercase tracking-wider block mb-3">Negative Words (Hurt Feelings)</span>
-                        <div id="explore-negative-grid" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div id="explore-negative-grid" className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           {vocabularyDatabase.filter(item => !item.isPositive).map(item => (
                             <button 
                               key={item.value}
@@ -1803,21 +1927,11 @@ export default function App() {
                               className="flex flex-col bg-white border border-slate-100 hover:border-emerald-300 hover:shadow-md rounded-2xl p-2 text-center transition-all h-44 justify-between"
                             >
                               <div className="w-full h-32 overflow-hidden rounded-xl bg-slate-50 relative flex items-center justify-center">
-                                {failedImages[item.value] ? (
-                                  <div className={`w-full h-full flex flex-col items-center justify-center rounded-xl bg-gradient-to-br ${fallbackStyling[item.value]?.bg || 'from-slate-50 to-slate-100'} border ${fallbackStyling[item.value]?.border || 'border-slate-200'} relative overflow-hidden shadow-inner`}>
-                                    <span className="text-2xl animate-bounce" style={{ animationDuration: '3.5s' }}>
-                                      {fallbackStyling[item.value]?.emoji || '✨'}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <img 
-                                    src={item.img} 
-                                    alt={item.value} 
-                                    className="w-full h-full object-cover" 
-                                    referrerPolicy="no-referrer"
-                                    onError={() => handleImageError(item.value)}
-                                  />
-                                )}
+                                <img 
+                                  src={`${item.img}?v=2`} 
+                                  alt={item.value} 
+                                  className="w-full h-full object-cover" 
+                                />
                               </div>
                               <span className="text-xs font-bold text-rose-800 capitalize mt-1">{item.value}</span>
                             </button>
@@ -1856,17 +1970,11 @@ export default function App() {
                               {card.type === 'word' ? (
                                 <span className="text-xs font-bold text-emerald-800 capitalize">{card.value}</span>
                               ) : (
-                                failedImages[card.value] ? (
-                                  <span className="text-xl">{fallbackStyling[card.value]?.emoji || '✨'}</span>
-                                ) : (
                                   <img 
-                                    src={card.img} 
+                                    src={`${card.img}?v=2`} 
                                     className="w-14 h-14 object-cover rounded-lg opacity-80" 
                                     alt={card.value}
-                                    referrerPolicy="no-referrer"
-                                    onError={() => handleImageError(card.value)}
                                   />
-                                )
                               )}
                             </button>
                           );
@@ -1882,17 +1990,11 @@ export default function App() {
                               {card.type === 'word' ? (
                                 <span className="text-xs font-bold text-slate-700 capitalize">{card.value}</span>
                               ) : (
-                                failedImages[card.value] ? (
-                                  <span className="text-xl">{fallbackStyling[card.value]?.emoji || '✨'}</span>
-                                ) : (
                                   <img 
-                                    src={card.img} 
+                                    src={`${card.img}?v=2`} 
                                     className="w-14 h-14 object-cover rounded-lg" 
                                     alt={card.value}
-                                    referrerPolicy="no-referrer"
-                                    onError={() => handleImageError(card.value)}
                                   />
-                                )
                               )}
                             </button>
                           );
@@ -1928,7 +2030,7 @@ export default function App() {
             {activeStep === 3 && (
               <div id="panel-step-3" className="transition-all duration-300">
                 <div className="flex items-center gap-2 mb-3">
-                  <span class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">3</span>
+                  <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">3</span>
                   <h3 className="font-bold text-slate-700 text-lg">Step 3: Speaking & Mind Map</h3>
                 </div>
                 <p className="text-xs text-slate-400 mb-4">Express empathy using full sentences. Use your microphone, type below, or explore the mind map brainstorm.</p>
@@ -2058,18 +2160,76 @@ export default function App() {
             {/* Panel Step 4: Daily Life Empathy */}
             {activeStep === 4 && (
               <div id="panel-step-4" className="transition-all duration-300 space-y-6">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">4</span>
-                  <h3 className="font-bold text-slate-700 text-lg">Step 4: Daily Empathy Practice</h3>
+                {/* Voice Control Floating Bar */}
+                {(isSpeaking || isPaused) && (
+                  <div className="sticky top-4 z-50 flex justify-center animate-fadeIn">
+                    <div className="flex items-center bg-white/90 backdrop-blur-md border-2 border-indigo-100 rounded-full px-5 py-2 shadow-xl gap-4">
+                      <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest border-r border-indigo-100 pr-4">Voice Assistant</span>
+                      <div className="flex items-center gap-3">
+                        {isPaused ? (
+                          <button 
+                            onClick={resumeSpeech}
+                            className="p-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-full transition-all active:scale-90"
+                            title="Resume"
+                          >
+                            <Play className="w-5 h-5 fill-current" />
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={pauseSpeech}
+                            className="p-2 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-full transition-all active:scale-90"
+                            title="Pause"
+                          >
+                            <Pause className="w-5 h-5 fill-current" />
+                          </button>
+                        )}
+                        <button 
+                          onClick={stopSpeech}
+                          className="p-2 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-full transition-all active:scale-90"
+                          title="Stop"
+                        >
+                          <Square className="w-5 h-5 fill-current" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">4</span>
+                    <h3 className="font-bold text-slate-700 text-lg">Step 4: Daily Empathy Practice</h3>
+                  </div>
+                  
+                  {/* Feedback Language Selector */}
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                    <button 
+                      onClick={() => setFeedbackLanguage('english')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${feedbackLanguage === 'english' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      ENGLISH 🇬🇧
+                    </button>
+                    <button 
+                      onClick={() => setFeedbackLanguage('cantonese')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${feedbackLanguage === 'cantonese' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      粤语 🇭🇰
+                    </button>
+                    <button 
+                      onClick={() => setFeedbackLanguage('mandarin')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${feedbackLanguage === 'mandarin' ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      普通话 🇨🇳
+                    </button>
+                  </div>
                 </div>
                 
                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 flex flex-col md:flex-row gap-5 items-center">
                   <div className="w-full md:w-1/3 flex justify-center">
                     <img 
-                      src="/IMAGES/CHILD-PARENT FIGHTING.png" 
+                      src="/images/child-parent-fighting.png?v=2" 
                       alt="Parent and Child Communication" 
                       className="rounded-2xl shadow-md border border-slate-200/60 max-h-[160px] object-cover hover:scale-105 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
                     />
                   </div>
                   <div className="w-full md:w-2/3 text-xs text-slate-600 leading-relaxed space-y-2">
@@ -2108,10 +2268,9 @@ export default function App() {
                         {scenario.img && (
                           <div className="mb-4 overflow-hidden rounded-xl border border-slate-100 flex justify-center bg-slate-50 h-[180px] w-full">
                             <img 
-                              src={scenario.img} 
+                              src={`${scenario.img}?v=2`} 
                               alt={scenario.title} 
                               className="h-full w-full object-contain rounded-xl transition-transform hover:scale-102 duration-300"
-                              referrerPolicy="no-referrer"
                             />
                           </div>
                         )}
@@ -2151,14 +2310,11 @@ export default function App() {
                           <textarea
                             value={step4Inputs[scenario.id]}
                             onChange={(e) => {
-                              if (!isSubmitted) {
-                                setStep4Inputs(prev => ({ ...prev, [scenario.id]: e.target.value }));
-                              }
+                              setStep4Inputs(prev => ({ ...prev, [scenario.id]: e.target.value }));
                             }}
-                            disabled={isSubmitted}
                             className={`w-full min-h-[70px] text-xs p-3 rounded-xl border focus:outline-none transition-all ${
                               isSubmitted
-                                ? 'bg-slate-50 border-emerald-100 text-emerald-800 font-semibold'
+                                ? 'bg-emerald-50/40 border-emerald-100 text-emerald-800 font-medium'
                                 : 'bg-white border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-100'
                             }`}
                             placeholder={scenario.suggestedPlaceholder}
@@ -2179,12 +2335,7 @@ export default function App() {
                           )}
 
                           {/* Submit / Status Button */}
-                          {isSubmitted ? (
-                            <div className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-100/50 py-1.5 px-3 rounded-lg justify-center border border-emerald-200">
-                              <CheckCircle className="w-4 h-4" />
-                              <span>Empathetic Language Unlocked! 🌸</span>
-                            </div>
-                          ) : step4Checking[scenario.id] ? (
+                          {step4Checking[scenario.id] ? (
                             <button
                               type="button"
                               disabled
@@ -2197,9 +2348,20 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleStep4Submit(scenario.id)}
-                              className="w-full py-2 bg-indigo-500 hover:bg-indigo-600 active:scale-95 text-white font-bold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5"
+                              className={`w-full py-2 font-bold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 ${
+                                isSubmitted 
+                                  ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white' 
+                                  : 'bg-indigo-500 hover:bg-indigo-600 active:scale-95 text-white'
+                              }`}
                             >
-                              <span>✨ Transform with Empathy</span>
+                              {isSubmitted ? (
+                                <>
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>Re-check Empathy ✨</span>
+                                </>
+                              ) : (
+                                <span>✨ Transform with Empathy</span>
+                              )}
                             </button>
                           )}
                         </div>
@@ -2260,10 +2422,11 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => loadStep5Template(
-                        "my English teacher",
+                        "my teacher",
                         "Thank you very much for being so patient and supportive. I feel so lucky to have you as my English teacher.",
-                        "pink and purple style",
-                        "a cute cat sticker"
+                        "soft pastel sparkles",
+                        "a cute cat sticker",
+                        "Your loving student"
                       )}
                       className="px-3 py-1.5 bg-violet-100 hover:bg-violet-200 text-violet-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
@@ -2274,8 +2437,9 @@ export default function App() {
                       onClick={() => loadStep5Template(
                         "my mother",
                         "Dear Mom, thank you so much for always taking such wonderful care of me, making delicious dinners, and hugging me when I feel down. I love you!",
-                        "warm watercolor floral design with pastel yellow",
-                        "sweet pink flowers and hearts"
+                        "warm watercolor floral",
+                        "sweet pink flowers",
+                        "Your child"
                       )}
                       className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
@@ -2390,9 +2554,14 @@ export default function App() {
                           'cute cartoon design',
                           'warm watercolor floral',
                           'modern minimalist line-art',
-                          'beautiful oil painting style',
+                          'Japanese Anime style',
+                          'Retro Pixel Art',
+                          'beautiful oil painting',
+                          'Cyberpunk neon vibe',
                           'cozy sunset background',
-                          'adorable crayon illustration',
+                          'adorable crayon drawing',
+                          'elegant charcoal sketch',
+                          'Vibrant Pop Art',
                           'soft pastel sparkles'
                         ].map((sty) => (
                           <button
